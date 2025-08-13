@@ -174,16 +174,21 @@ window.addEventListener('load', () => {
     else items.forEach(it => { const d = document.createElement('div'); d.className = `badge inline-block ${it.s}`; d.textContent = it.t; el.appendChild(d); });
 
     const json = {
-      parties: { seller: { name: getValue('sellerName'), ssn: getValue('sellerSSN') }, buyer: { name: getValue('buyerName'), ssn: getValue('buyerSSN') } },
-      property: { address: getValue('propertyAddress'), id: getValue('propertyId') },
-      price: { total: getValue('price'), deposit: getValue('deposit') },
-      dates: { handover: getValue('handover') },
-      flags: { hasLoan, hasChain, hasLandLease },
-      conditions: getValue('conditions'),
-      checklist: items.map(i => i.t)
-    };
-    $('jsonOut').value = JSON.stringify(json, null, 2);
-  }
+  parties: {
+    seller: { name: getValue('sellerName'), ssn: getValue('sellerSSN') },
+    buyer:  { name: getValue('buyerName'),  ssn: getValue('buyerSSN') }
+  },
+  property: { address: getValue('propertyAddress'), id: getValue('propertyId') },
+  price: { total: getValue('price'), deposit: getValue('deposit') },
+  dates: { handover: getValue('handover'), deed_issue: getValue('deedIssueDate') },
+  flags: { hasLoan, hasChain, hasLandLease },
+  contingencies: {
+    seller: getValue('sellerContingencies'),
+    buyer:  getValue('buyerContingencies'),
+    combined: getValue('conditions')
+  },
+  checklist: items.map(i => i.t)
+};
 
   function parseFields(text) {
     <script>
