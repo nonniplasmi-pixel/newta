@@ -78,6 +78,19 @@
         <div><label>Trygging / útborgun (ISK)</label><input id="deposit" placeholder="t.d. 3.250.000"/></div>
         <div><label>Afhendingardagur</label><input id="handover" placeholder="YYYY-MM-DD"/></div>
         <div><label>Fyrirvarar / sérákvæði</label><input id="conditions" placeholder="t.d. fjármögnun, skilyrt veðleyfi, skoðun..."/></div>
+        <div>
+  <label>Útgáfudagur afsals</label>
+  <input id="deedIssueDate" placeholder="YYYY-MM-DD eða texti (t.d. við uppgjör)"/>
+</div>
+<div>
+  <label>Fyrirvarar seljanda</label>
+  <input id="sellerContingencies" placeholder="Texti úr kauptilboði"/>
+</div>
+<div>
+  <label>Fyrirvarar kaupanda</label>
+  <input id="buyerContingencies" placeholder="Texti úr kauptilboði"/>
+</div>
+        
       </div>
 
       <div class="mt-4 grid md:grid-cols-2 gap-3">
@@ -173,19 +186,146 @@ window.addEventListener('load', () => {
   }
 
   function parseFields(text) {
-    const clean = (text || "").replace(/\s+/g, " ").trim();
-    const grab = (re) => { const m = clean.match(re); return m ? (m[1] || m[0]) : ""; };
-    const sellerName = grab(/Seljandi\s*[:\-]\s*([^,\n]+?)(?:\s+kt\.?|\s+kennitala|,|\.)/i);
-    const sellerSSN  = grab(/Seljandi[^\d]*(\d{6}[\- ]?\d{4})/i);
-    const buyerName  = grab(/Kaupandi\s*[:\-]\s*([^,\n]+?)(?:\s+kt\.?|\s+kennitala|,|\.)/i);
-    const buyerSSN   = grab(/Kaupandi[^\d]*(\d{6}[\- ]?\d{4})/i);
-    const address    = grab(/Eign\s*[:\-]\s*([^\n,]+?)(?:\s+fasteignanr\.|\s+fasteignanúmer|,|\.)/i) || grab(/Heimilisfang\s*[:\-]\s*([^\n,]+)/i);
-    const propId     = grab(/fasteigna(nr\.|númer)\s*[:\-]\s*([\w\-\/]+)/i);
-    const price      = grab(/Kaupver(?:d|ð)\s*[:\-]\s*([\d\. ]+)/i);
-    const deposit    = grab(/Trygging(?:\s*\/\s*utborgun)?\s*[:\-]\s*([\d\. ]+)/i);
-    const handover   = grab(/Afhending(?:ardagur)?\s*[:\-]\s*([0-9]{4}-[0-9]{2}-[0-9]{2}|\d{1,2}\.\d{1,2}\.\d{2,4})/i);
-    const conditions = grab(/Fyrirvarar?\s*[:\-]\s*([^\n]+)/i) || grab(/Serakv(?:ae|æð)i\s*[:\-]\s*([^\n]+)/i);
-    return { sellerName, sellerSSN, buyerName, buyerSSN, address, propId, price, deposit, handover, conditions, raw: clean };
+    <script>
+// --- NÝT Parse: styður töfluheiti + næstu línu, og kaflaskiptingar ---
+function parseFields(rawText) {
+  const txt = (rawText || "")
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")      // snyrta bil fyrir línuskil
+    .replace(/\u00A0/g, " ")         // non-breaking space
+    .trim();
+
+  const lines = txt.split(/\n+/);
+
+  // Hjálpar: finna línu með label, skila næstu óauðu línu
+  function nextLineAfter(labelRegex) {
+    for (let i = 0; i < lines.length; i++) {
+      if (labelRegex.test(lines[i])) {
+        // ef gildi er á sömu línu (t.d. "Útgáfudagur afsals: 01.09.2025")
+        const sameLine = lines[i].replace(/\s+/g, " ").trim();
+        const mSame = sameLine.match(/:\s*(.+)$/);
+        if (mSame && mSame[1]) return mSame[1].trim();
+
+        // annars taka næstu óauðu línu
+        for (let j = i + 1; j < lines.length; j++) {
+          const val = lines[j].trim();
+          if (val) return val;
+        }
+      }
+    }
+    return "";
+  }
+
+  // Hjálpar: finna kaflann "Greiðslutilhögun" og skila næstu 5 línum
+  function sectionAfter(labelRegex, maxLines = 6) {
+    for (let i = 0; i < lines.length; i++) {
+      if (labelRegex.test(lines[i])) {
+        const out = [];
+        for (let j = i + 1; j < Math.min(lines.length, i + 1 + maxLines); j++) {
+          const val = lines[j].trim();
+          if (!val) break;
+          out.push(val);
+        }
+        return out.join("\n");
+      }
+    }
+    return "";
+  }
+
+  // Hjálpar: snyrta nafn og taka kennitölu af línu
+  function splitNameAndSSN(line) {
+    const ssnMatch = line.match(/\b(\d{6}[- ]?\d{4})\b/);
+    const ssn = ssnMatch ? ssnMatch[1].replace(" ", "-") : "";
+    const name = ssnMatch ? line.slice(0, ssnMatch.index).trim() : line.trim();
+    return { name: name.replace(/[,\s]+$/,""), ssn };
+  }
+
+  // --- SELJANDI (töfluhaus: "Seljandi Kennitala ...") ---
+  let sellerLine = nextLineAfter(/^\s*Seljandi(\s+Kennitala.*)?\s*$/i);
+  let seller = splitNameAndSSN(sellerLine);
+
+  // --- KAUPANDI ---
+  let buyerLine = nextLineAfter(/^\s*Kaupandi(\s+Kennitala.*)?\s*$/i);
+  // getur verið fleiri en einn kaupandi á sömu línu; geymum nafnalínuna óklippta og leitum SSN síðar
+  let buyer = splitNameAndSSN(buyerLine);
+
+  // --- KAUPVERÐ (oft "Kaupverð í tölustöfum" á einni línu og talan á næstu) ---
+  let priceLine = nextLineAfter(/Kaupver[ðd](\s+í\s+tölustöfum)?/i);
+  // leyfa punkta, bil og "kr" valkvætt
+  let price = (priceLine.match(/[\d\. ]+(?:\s*kr\.?|\skr\.?)?/i) || [""])[0]
+    .replace(/\s+kr\.?/i, " kr.")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // --- ÚTBORGUN / TRYGGING (ef til) ---
+  let depositLine = nextLineAfter(/(Trygging|Útborgun)/i);
+  let deposit = (depositLine.match(/[\d\. ]+(?:\s*kr\.?|\skr\.?)?/i) || [""])[0]
+    .replace(/\s+kr\.?/i, " kr.")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // --- AFHENDING ---
+  let handover = nextLineAfter(/Afhending(ardagur)?/i) || nextLineAfter(/Afhending/i);
+
+  // --- ÚTGÁFUDAGUR AFSALS ---
+  let deedIssueDate = nextLineAfter(/Útgáfudagur\s+afsals/i);
+  if (!deedIssueDate) {
+    // fallback: leita í Greiðslutilhögun kafla
+    const payPlan = sectionAfter(/Greiðslutilhögun/i, 12);
+    const m = payPlan.match(/(Afsal|útgáf[ua]\s+afsals).*?(\d{1,2}\.\d{1,2}\.\d{2,4}|[0-9]{4}-[0-9]{2}-[0-9]{2}|við\s+uppgjör|við\s+afsal)/i);
+    deedIssueDate = m ? m[2] : "";
+  }
+
+  // --- FYRIRVARAR (heildir) + aðskildir selj./kaup. ---
+  const sellerCont = nextLineAfter(/Fyrirvarar\s+seljanda/i) || "";
+  const buyerCont  = nextLineAfter(/Fyrirvarar\s+kaupanda/i) || "";
+  // sameinað "Fyrirvarar / sérákvæði" (gamli reiturinn hjá okkur)
+  let conditionsBlock = nextLineAfter(/Fyrirvarar(\s*\/\s*sérákvæði)?/i) || "";
+  // ef ekkert fannst í "Fyrirvarar", prófa "Sérákvæði"
+  if (!conditionsBlock) conditionsBlock = nextLineAfter(/Sérákvæði/i) || "";
+
+  // --- ADDRESS / PROPERTY ---
+  // ýmist "Eign" → næsta lína, eða "Heimilisfang"
+  let address = nextLineAfter(/^\s*Eign\s*$/i) || nextLineAfter(/Heimilisfang/i);
+  // fasteignanúmer/landnúmer helst á sömu/næstu
+  let propId = nextLineAfter(/fasteigna(nr\.|númer)|landnúmer/i);
+
+  // --- KAUPANDI: ef fleiri en eitt nafn + margar kennitölur á næstu línum ---
+  // leitum fleiri kt. í næstu 1-2 línum
+  let extraBuyerSSNs = [];
+  const buyerIdx = lines.findIndex(l => /^\s*Kaupandi(\s+Kennitala.*)?\s*$/i.test(l));
+  if (buyerIdx >= 0) {
+    for (let j = buyerIdx + 1; j <= Math.min(buyerIdx + 2, lines.length - 1); j++) {
+      const found = lines[j].match(/\b\d{6}[- ]?\d{4}\b/g);
+      if (found) extraBuyerSSNs.push(...found.map(s => s.replace(" ", "-")));
+    }
+  }
+  // sameina nafnalínu og fjarlægja kt. úr henni
+  const buyerNames = buyerLine
+    .replace(/\b\d{6}[- ]?\d{4}\b/g, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/[,\s]+$/,"")
+    .trim();
+
+  return {
+    // aðilar
+    sellerName: seller.name, sellerSSN: seller.ssn,
+    buyerName: buyerNames || buyer.name, buyerSSN: buyer.ssn || (extraBuyerSSNs[0] || ""),
+    // eign
+    address, propId,
+    // fjármál/dagar
+    price, deposit, handover,
+    // nýtt
+    deedIssueDate,
+    sellerContingencies: sellerCont,
+    buyerContingencies:  buyerCont,
+    conditions: conditionsBlock,
+    // hrátt
+    raw: txt
+  };
+}
+</script>
+
   }
 
   async function extractTextFromPDF_TextLayer(file) {
